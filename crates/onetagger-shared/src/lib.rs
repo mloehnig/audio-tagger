@@ -77,7 +77,9 @@ pub fn setup() {
                         message
                     ))
                 })
-                .chain(std::io::stdout())
+                // Logs go to stderr so stdout is reserved for actual command output
+                // (e.g. the JSON printed by the `unprocessed` / config subcommands).
+                .chain(std::io::stderr())
         )
         // Log file
         .chain(

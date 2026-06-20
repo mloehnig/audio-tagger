@@ -43,9 +43,12 @@ fn main() {
 
     let action = cli.action.unwrap();
     match &action {
-        Actions::Autotagger { path, dry_run, changes, save_every, .. } => {
+        Actions::Autotagger { path, dry_run, changes, save_every, shazam_concurrency, shazam_interval_ms, .. } => {
             let config = action.get_at_config().expect("Failed loading config file!");
             debug!("{:?}", config);
+
+            // Configure the global Shazam rate limit before any recognition starts
+            onetagger_autotag::configure_shazam(shazam_concurrency.unwrap_or(3), shazam_interval_ms.unwrap_or(350));
 
             // Get files
             let mut files = if path.is_file() {
@@ -83,6 +86,42 @@ fn main() {
                 }
             }
             info!("Apply finished: {ok} ok, {failed} failed.");
+        },
+        // List audio files under a directory that aren't yet successfully processed in a changes file
+        Actions::Unprocessed { changes, path, no_subfolders } => {
+            let file = File::open(changes).expect("Failed opening changes file!");
+            let doc: ChangesDocument = serde_json::from_reader(file).expect("Failed parsing changes file!");
+
+            // Paths that already have a successful match (these are considered "processed")
+            let matched: std::collections::HashSet<PathBuf> = doc.files.iter()
+                .filter(|f| f.matched)
+                .map(|f| canonical(&f.path))
+                .collect();
+
+            // Gather candidate audio files (mirror the autotagger's input handling)
+            let mut files = if path.is_file() {
+                onetagger_playlist::get_files_from_playlist_file(path).expect("Not a valid playlist file")
+            } else {
+                AudioFileInfo::get_file_list(path, !*no_subfolders)
+            };
+            // Never treat generated `.tagged` copies as inputs
+            files.retain(|f| !is_tagged_output_path(f, &doc.config.output_suffix));
+
+            let total = files.len();
+            let mut unprocessed: Vec<PathBuf> = files.into_iter()
+                .filter(|f| !matched.contains(&canonical(f)))
+                .collect();
+            unprocessed.sort();
+
+            let report = serde_json::json!({
+                "directory": path,
+                "changesFile": changes,
+                "totalFiles": total,
+                "processed": total - unprocessed.len(),
+                "unprocessed": unprocessed.len(),
+                "files": unprocessed,
+            });
+            println!("{}", serde_json::to_string_pretty(&report).expect("Failed serializing report"));
         },
         Actions::Audiofeatures { path, config, client_id, client_secret, no_subfolders } => {
             let file = File::open(config).expect("Failed reading config file!");
@@ -247,6 +286,11 @@ fn run_dry_run(config: TaggerConfig, mut files: Vec<PathBuf>, out_path: PathBuf,
     info!("Dry run complete in {}s: {} files recorded ({matched} matched, {pre_matched} pre-existing). Wrote {}",
         (timestamp!() - start) / 1000, entries.len(), out_path.display());
     info!("Review/edit it, then run: onetagger-cli apply --changes {}", out_path.display());
+}
+
+/// Canonicalize a path for comparison, falling back to the raw path if it can't be resolved.
+fn canonical(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// Load entries from an existing changes file (returns empty on missing/unparseable file).
@@ -430,6 +474,14 @@ enum Actions {
         /// During --dry-run, write the changes file every N processed files (default: 25)
         #[clap(long)]
         save_every: Option<u32>,
+
+        /// Max concurrent Shazam requests (rate-limit protection; default: 3)
+        #[clap(long)]
+        shazam_concurrency: Option<usize>,
+
+        /// Minimum milliseconds between Shazam requests (rate-limit protection; default: 350)
+        #[clap(long)]
+        shazam_interval_ms: Option<u64>,
     },
     /// Apply tag changes from a changes file produced by `autotagger --dry-run`
     Apply {
@@ -440,6 +492,20 @@ enum Actions {
         /// Modify the original files in place instead of writing `.tagged` copies (DESTRUCTIVE)
         #[clap(long)]
         in_place: bool,
+    },
+    /// List audio files in a directory that are not yet successfully processed in a changes file (prints JSON)
+    Unprocessed {
+        /// Path to the changes JSON file
+        #[clap(short, long)]
+        changes: PathBuf,
+
+        /// Directory (or playlist file) of audio files to check
+        #[clap(short, long)]
+        path: PathBuf,
+
+        /// Don't include subfolders
+        #[clap(long)]
+        no_subfolders: bool,
     },
     /// Start Audio Features in CLI mode
     Audiofeatures {
@@ -552,7 +618,7 @@ impl Actions {
                 overwrite, threads, strictness, album_art_file, merge_genres, camelot,
                 short_title, match_duration, max_duration_difference, match_by_id, enable_shazam, force_shazam,
                 skip_tagged, parse_filename, filename_template, no_subfolders, only_year, multiplatform,
-                in_place, dry_run, changes: _, save_every: _ } => {
+                in_place, dry_run, changes: _, save_every: _, shazam_concurrency: _, shazam_interval_ms: _ } => {
 
                 // Load config
                 let mut config = if let Some(config_path) = config {

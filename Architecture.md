@@ -133,6 +133,12 @@ The CLI decouples matching from writing so changes can be reviewed and hand-edit
    (`set_raw(new, overwrite=true)`, plus art fetched from `artUrl`), to the `.tagged` copy by
    default or the original with `--in-place`. No platform re-querying — fast and offline.
 
+`onetagger-cli unprocessed --changes out.json --path <dir>` lists, as pretty JSON on stdout,
+the audio files under `<dir>` that do **not** have a successful (matched) entry in the changes
+file — i.e. exactly what a `--dry-run` resume would still process (never-seen + previously
+failed). Generated `.tagged` copies are excluded. Useful for checking remaining work before
+re-running. (Logs go to **stderr**, so stdout is clean JSON — pipeable into `jq`/`python`.)
+
 Because the JSON keys are raw frame names straight from `all_tags()`, edits round-trip
 losslessly through `set_raw`.
 
@@ -150,6 +156,30 @@ write at the end:
   have a successful match are **skipped**, while previously **unmatched/failed** files are
   reprocessed (so a rate-limit interruption is recoverable). Re-running the same command
   picks up where it left off instead of reprocessing the whole directory.
+
+## Shazam rate limiting
+
+Shazam recognition (`onetagger-autotag/src/shazam.rs`) runs **inside the tagging worker
+threads**, so without limits it fires up to `--threads` (default 16) concurrent requests at
+Shazam's unofficial endpoint and gets 429-throttled. songrec retries a 429 ~5× with growing
+backoff (8–40s) then gives up, marking the file failed.
+
+A **process-wide limiter**, independent of the thread count, sits in front of the network
+call (`shazam_throttle`):
+- A **concurrency cap** (crossbeam bounded-channel used as a semaphore) limits how many
+  Shazam requests are in flight at once.
+- A **minimum interval** (`SHAZAM_LAST` mutex) spaces out request *starts* globally.
+
+Both are tunable from the CLI — `--shazam-concurrency` (default **3**) and
+`--shazam-interval-ms` (default **350**) — applied via `configure_shazam(..)` before tagging
+starts (the permit pool reads the concurrency once, at first use). Platform matching stays
+fully parallel; only Shazam is throttled. Combined with dry-run resume, a run that still gets
+throttled can simply be re-run to finish the remaining files.
+
+Mitigations beyond the throttle: prefer `--enable-shazam` + `--parse-filename` over
+`--force-shazam` so Shazam is only a fallback. A longer-term alternative to Shazam is
+**AcoustID + Chromaprint** (free, bulk-friendly, resolves via the existing MusicBrainz
+integration).
 
 ## State of the project (abandoned)
 

@@ -29,6 +29,7 @@ use onetagger_tagger::{Track, AudioFileInfo, TaggerConfig, StylesOptions, Autota
 
 use crate::shazam::Shazam;
 mod shazam;
+pub use shazam::configure_shazam;
 
 pub mod repo;
 pub mod platforms;
