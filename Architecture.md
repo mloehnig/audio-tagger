@@ -134,8 +134,10 @@ The CLI decouples matching from writing so changes can be reviewed and hand-edit
    default or the original with `--in-place`. No platform re-querying — fast and offline.
    Apply runs **in parallel** (each entry writes its own file and fetches its own art, so
    there's no shared state) using `std::thread::scope` with an `AtomicUsize` work-stealing
-   index (`ChangesDocument::apply`). Parallelism = `apply --threads <N>`, defaulting to the
-   thread count stored in the changes file, always capped at the number of files to write.
+   index (`ChangesDocument::apply`). Parallelism = `apply -j/--threads <N>`, defaulting to
+   **2× CPU cores** (`onetagger_shared::default_thread_count`), always capped at the number of
+   files to write. The autotagger's `-j/--threads` likewise defaults to 2× CPU cores when
+   unset (unless a `--config` file specifies a thread count).
 
 `onetagger-cli unprocessed --changes out.json --path <dir>` lists, as pretty JSON on stdout,
 the audio files under `<dir>` that do **not** have a successful (matched) entry in the changes
