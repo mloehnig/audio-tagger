@@ -139,6 +139,7 @@ async fn get_ws(ws: WebSocketUpgrade, State(context): State<StartContext>) -> im
 /// Spotify token callback
 async fn get_spotify_callback(request: Request<Body>) -> impl IntoResponse {
     info!("Got Spotify token from callback");
+    debug!("Spotify callback uri: {}", request.uri());
     WEBSERVER_CALLBACKS.lock().unwrap().insert("spotify".to_string(), request.uri().to_string());
     (StatusCode::OK, [(CONTENT_TYPE, "text/html")], include_str!("../../../assets/spotify_callback.html"))
 }

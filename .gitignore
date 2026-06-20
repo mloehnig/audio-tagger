@@ -13,6 +13,7 @@ test/
 vc_redist.x64.exe
 assets/vc_redist.x64.exe
 *.dll
+**example/
 
 perf.data
 perf.data.old

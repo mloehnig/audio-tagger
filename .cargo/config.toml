@@ -9,3 +9,8 @@ rustflags = ["-Ctarget-feature=+crt-static"]
 # Use ldd for faster compile on Linux
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# Fetch git dependencies (e.g. songrec) via the git CLI so that user git config
+# (such as url.insteadOf SSH rewrites) and system SSH credentials are honored.
+[net]
+git-fetch-with-cli = true

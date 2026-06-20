@@ -12,8 +12,12 @@ pub struct MP3Source {
 }
 impl MP3Source {
     pub fn new(path: impl AsRef<Path>) -> Result<MP3Source, Error> {
-        // Get duration
-        let file = lofty::read_from_path(&path)?;
+        // Get duration. Only read audio properties, not tags - tag parsing (e.g. lofty's
+        // strict ID3 timestamp validation) can fail on files with malformed metadata, and we
+        // only need the duration here.
+        let file = lofty::probe::Probe::open(&path)?
+            .options(lofty::config::ParseOptions::new().read_tags(false))
+            .read()?;
         let duration = file.properties().duration();
 
         Ok(MP3Source {

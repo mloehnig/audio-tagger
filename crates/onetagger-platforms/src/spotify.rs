@@ -67,7 +67,9 @@ impl Spotify {
         };
 
         // Auth
-        let code = spotify.parse_response_code(token.trim()).ok_or(anyhow!("Invalid token url!"))?;
+        debug!("Spotify auth_server callback url: {token}");
+        Self::check_callback_error(&token)?;
+        let code = spotify.parse_response_code(token.trim()).ok_or(anyhow!("Invalid token url (no authorization code / state mismatch)!"))?;
         spotify.request_token(&code)?;
         spotify.auto_reauth()?;
         spotify.write_token_cache()?;
@@ -78,13 +80,34 @@ impl Spotify {
 
     /// Authorize from URL
     pub fn auth_token_code(spotify: AuthCodeSpotify, url: &str) -> Result<Spotify, Error> {
-        let code = spotify.parse_response_code(url).ok_or(anyhow!("Invalid token url!"))?;
+        Self::check_callback_error(url)?;
+        let code = spotify.parse_response_code(url).ok_or(anyhow!("Invalid token url (no authorization code / state mismatch)!"))?;
         spotify.request_token(&code)?;
         spotify.auto_reauth()?;
         spotify.write_token_cache()?;
         Ok(Spotify {
             spotify
         })
+    }
+
+    /// If the Spotify callback URL contains an `error` query parameter, return a descriptive error.
+    /// Spotify returns e.g. `?error=server_error` or `?error=access_denied` instead of a `code`.
+    fn check_callback_error(url: &str) -> Result<(), Error> {
+        let error = url.split_once('?').and_then(|(_, query)| {
+            query.split('&').find_map(|kv| match kv.split_once('=') {
+                Some(("error", value)) => Some(value.to_string()),
+                _ => None,
+            })
+        });
+        if let Some(error) = error {
+            return Err(anyhow!(
+                "Spotify rejected the authorization (error: '{error}'). \
+                 In the Spotify Developer Dashboard, make sure the app has the 'Web API' enabled \
+                 and the Redirect URI is exactly 'http://127.0.0.1:{PORT}/spotify', then try again. \
+                 'server_error' is sometimes transient - retrying can also help."
+            ));
+        }
+        Ok(())
     }
 
     /// Wrapper for rate limit 
