@@ -394,7 +394,7 @@ enum Actions {
         #[clap(long)]
         overwrite: bool,
 
-        /// How many threads to use for the searching & matching process
+        /// How many threads to use for the searching & matching process (default: 2x CPU cores)
         #[clap(short = 'j', long)]
         threads: Option<u16>,
 
@@ -501,7 +501,7 @@ enum Actions {
         #[clap(long)]
         in_place: bool,
 
-        /// Max files to write in parallel (default: the thread count stored in the changes file)
+        /// Max files to write in parallel (default: 2x CPU cores)
         #[clap(short = 'j', long)]
         threads: Option<usize>,
     },
@@ -633,6 +633,7 @@ impl Actions {
                 in_place, dry_run, changes: _, save_every: _, shazam_concurrency: _, shazam_interval_ms: _, acoustid_api_key: _ } => {
 
                 // Load config
+                let has_config_file = config.is_some();
                 let mut config = if let Some(config_path) = config {
                     let config = serde_json::from_reader(&File::open(config_path)?)?;
                     config
@@ -665,8 +666,11 @@ impl Actions {
                 config_option!(config, id3v24, overwrite, album_art_file, merge_genres, camelot, short_title, match_duration,
                     match_by_id, enable_shazam, force_shazam, skip_tagged, parse_filename, only_year, multiplatform);
                 // Remaining options
+                // Threads: -j wins; otherwise default to 2x CPU cores (unless a config file set it)
                 if let Some(threads) = threads {
                     config.threads = *threads;
+                } else if !has_config_file {
+                    config.threads = onetagger_shared::default_thread_count() as u16;
                 }
                 if let Some(strictness) = strictness {
                     if *strictness > 100 {

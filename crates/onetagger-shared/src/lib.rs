@@ -37,6 +37,12 @@ lazy_static::lazy_static! {
     pub static ref WEBSERVER_CALLBACKS: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
 }
 
+/// Default worker thread count when none is specified: 2x the logical CPU cores (min 2).
+pub fn default_thread_count() -> usize {
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    (cores * 2).max(2)
+}
+
 /// Setup onetagger logging and panic hooks
 pub fn setup() {
     // Fern logger setup

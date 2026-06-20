@@ -89,8 +89,8 @@ impl ChangesDocument {
         }
 
         // Each entry writes its own file (and downloads its own art), so this is fully parallel.
-        // Use the requested limit (or the changes file's configured count); cap at the work amount.
-        let requested = threads.unwrap_or(self.config.threads as usize);
+        // Use the requested limit, else default to 2x CPU cores; cap at the work amount.
+        let requested = threads.unwrap_or_else(onetagger_shared::default_thread_count);
         let threads = requested.max(1).min(work.len());
         let next = AtomicUsize::new(0);
         let results = Mutex::new(Vec::with_capacity(work.len()));
