@@ -43,12 +43,15 @@ fn main() {
 
     let action = cli.action.unwrap();
     match &action {
-        Actions::Autotagger { path, dry_run, changes, save_every, shazam_concurrency, shazam_interval_ms, .. } => {
+        Actions::Autotagger { path, dry_run, changes, save_every, shazam_concurrency, shazam_interval_ms, acoustid_api_key, .. } => {
             let config = action.get_at_config().expect("Failed loading config file!");
             debug!("{:?}", config);
 
             // Configure the global Shazam rate limit before any recognition starts
             onetagger_autotag::configure_shazam(shazam_concurrency.unwrap_or(3), shazam_interval_ms.unwrap_or(350));
+            // Enable AcoustID fallback if a key is provided (flag or ACOUSTID_API_KEY env var)
+            let acoustid_key = acoustid_api_key.clone().or_else(|| std::env::var("ACOUSTID_API_KEY").ok());
+            onetagger_autotag::configure_acoustid(acoustid_key);
 
             // Get files
             let mut files = if path.is_file() {
@@ -482,6 +485,11 @@ enum Actions {
         /// Minimum milliseconds between Shazam requests (rate-limit protection; default: 350)
         #[clap(long)]
         shazam_interval_ms: Option<u64>,
+
+        /// AcoustID API key — enables AcoustID as a fingerprint fallback after Shazam.
+        /// Requires the `fpcalc` (Chromaprint) tool on PATH. Falls back to the ACOUSTID_API_KEY env var.
+        #[clap(long)]
+        acoustid_api_key: Option<String>,
     },
     /// Apply tag changes from a changes file produced by `autotagger --dry-run`
     Apply {
@@ -618,7 +626,7 @@ impl Actions {
                 overwrite, threads, strictness, album_art_file, merge_genres, camelot,
                 short_title, match_duration, max_duration_difference, match_by_id, enable_shazam, force_shazam,
                 skip_tagged, parse_filename, filename_template, no_subfolders, only_year, multiplatform,
-                in_place, dry_run, changes: _, save_every: _, shazam_concurrency: _, shazam_interval_ms: _ } => {
+                in_place, dry_run, changes: _, save_every: _, shazam_concurrency: _, shazam_interval_ms: _, acoustid_api_key: _ } => {
 
                 // Load config
                 let mut config = if let Some(config_path) = config {

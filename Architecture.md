@@ -157,6 +157,27 @@ write at the end:
   reprocessed (so a rate-limit interruption is recoverable). Re-running the same command
   picks up where it left off instead of reprocessing the whole directory.
 
+## Fingerprint identification chain (Shazam + AcoustID)
+
+When a file can't be identified from its tags, OneTagger identifies it by **audio
+fingerprint**. This runs through a fallback **chain** (`onetagger-autotag/src/identifier.rs`,
+`identify()`), trying each provider in order and moving to the next when one fails:
+
+1. **Shazam** (`shazam.rs`) — always available, no setup; reverse-engineered via `songrec`.
+2. **AcoustID** (`acoustid.rs`) — only when an API key is configured. Uses Chromaprint's
+   `fpcalc` tool to fingerprint the file, then the AcoustID lookup API, which resolves to
+   MusicBrainz recordings (title/artist). Requires `fpcalc` on PATH and a free AcoustID
+   application key (`--acoustid-api-key` or the `ACOUSTID_API_KEY` env var).
+
+The chain is entered at the same points Shazam was before (the `--force-shazam` path and the
+tags-failed fallback, both gated by `--enable-shazam`). `TaggingStatus.used_shazam` is set
+only when Shazam specifically produced the match. Adding another provider (e.g. a RapidAPI
+Shazam endpoint) is just another arm in `identify()`.
+
+Ordering note: Shazam is tried first, so a rate-limited Shazam still runs (and slowly fails)
+before AcoustID is attempted. If AcoustID is your primary goal (e.g. to avoid Shazam's limits
+entirely), trying AcoustID first would be the better order — currently a follow-up, not wired.
+
 ## Shazam rate limiting
 
 Shazam recognition (`onetagger-autotag/src/shazam.rs`) runs **inside the tagging worker

@@ -29,7 +29,10 @@ use onetagger_tagger::{Track, AudioFileInfo, TaggerConfig, StylesOptions, Autota
 
 use crate::shazam::Shazam;
 mod shazam;
+mod acoustid;
+mod identifier;
 pub use shazam::configure_shazam;
+pub use acoustid::configure_acoustid;
 
 pub mod repo;
 pub mod platforms;
@@ -876,16 +879,16 @@ impl Tagger {
         // Title cleanup regex
         let title_regex = config.title_regex.as_ref().map(|r| Regex::new(&r).ok()).flatten();
 
-        // Load audio file info by shazam or tags
+        // Load audio file info by fingerprint identifier chain (Shazam -> AcoustID) or tags
         let mut info = if config.enable_shazam && config.force_shazam {
-            match AudioFileInfo::shazam(&path) {
-                Ok(i) => {
-                    out.used_shazam = true;
+            match identifier::identify(path.as_ref()) {
+                Ok((i, kind)) => {
+                    out.used_shazam = kind == identifier::IdentifierKind::Shazam;
                     i
                 },
                 Err(e) => {
                     out.status = TaggingState::Skipped;
-                    out.message = Some(format!("Error Shazaming file: {}", e));
+                    out.message = Some(format!("Error identifying file: {}", e));
                     return (None, out);
                 }
             }
@@ -893,11 +896,11 @@ impl Tagger {
             match AudioFileInfo::load_file(&path, template, title_regex) {
                 Ok(info) => info,
                 Err(e) => {
-                    // Try shazam if enabled
+                    // Try the fingerprint identifier chain if enabled
                     if config.enable_shazam {
-                        match AudioFileInfo::shazam(&path) {
-                            Ok(info) => {
-                                out.used_shazam = true;
+                        match identifier::identify(path.as_ref()) {
+                            Ok((info, kind)) => {
+                                out.used_shazam = kind == identifier::IdentifierKind::Shazam;
                                 info
                             },
                             // Mark as failed
