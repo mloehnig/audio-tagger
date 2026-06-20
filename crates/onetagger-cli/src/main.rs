@@ -4,7 +4,7 @@
 use anyhow::Error;
 use onetagger_ui::StartContext;
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use clap::{Parser, Subcommand};
 use convert_case::{Casing, Case};
@@ -12,8 +12,9 @@ use onetagger_platforms::spotify::Spotify;
 use onetagger_renamer::{RenamerConfig, Renamer, TemplateParser};
 use onetagger_shared::{VERSION, COMMIT};
 use onetagger_autotag::audiofeatures::{AudioFeaturesConfig, AudioFeatures};
-use onetagger_autotag::{Tagger, TaggerConfigExt, AudioFileInfoImpl};
-use onetagger_tagger::{TaggerConfig, AudioFileInfo, SupportedTag};
+use onetagger_autotag::{Tagger, TaggerConfigExt, AudioFileInfoImpl, ChangeEntry, ChangesDocument, TaggingState, TaggingStatusWrap};
+use onetagger_tagger::{TaggerConfig, AudioFileInfo, SupportedTag, is_tagged_output_path};
+use std::collections::HashMap;
 
 fn main() {
     let cli = Cli::parse();
@@ -42,23 +43,46 @@ fn main() {
 
     let action = cli.action.unwrap();
     match &action {
-        Actions::Autotagger { path, .. } => {
+        Actions::Autotagger { path, dry_run, changes, save_every, .. } => {
             let config = action.get_at_config().expect("Failed loading config file!");
             debug!("{:?}", config);
 
             // Get files
-            let files = if path.is_file() {
+            let mut files = if path.is_file() {
                 onetagger_playlist::get_files_from_playlist_file(path).expect("Not a valid playlist file")
             } else {
                 AudioFileInfo::get_file_list(&path, config.include_subfolders)
             };
-
-            let rx = Tagger::tag_files(&config, files, Arc::new(Mutex::new(None)));
-            let start = timestamp!();
-            for status in rx {
-                debug!("{status:?}");
+            // Don't re-ingest previously written `.tagged` copies
+            if config.preserve_original {
+                files.retain(|f| !is_tagged_output_path(f, &config.output_suffix));
             }
-            info!("Tagging finished, took: {} seconds.", (timestamp!() - start) / 1000);
+
+            if *dry_run {
+                let out_path = changes.clone().unwrap_or_else(|| PathBuf::from("onetagger-changes.json"));
+                run_dry_run(config, files, out_path, save_every.unwrap_or(25).max(1));
+            } else {
+                let rx = Tagger::tag_files(&config, files, Arc::new(Mutex::new(None)));
+                let start = timestamp!();
+                for status in rx {
+                    debug!("{status:?}");
+                }
+                info!("Tagging finished, took: {} seconds.", (timestamp!() - start) / 1000);
+            }
+        },
+        // Apply changes from a changes file produced by `autotagger --dry-run`
+        Actions::Apply { changes, in_place } => {
+            let file = File::open(changes).expect("Failed opening changes file!");
+            let doc: ChangesDocument = serde_json::from_reader(file).expect("Failed parsing changes file!");
+            let results = doc.apply(*in_place);
+            let (mut ok, mut failed) = (0, 0);
+            for r in &results {
+                match &r.result {
+                    Ok(_) => { ok += 1; info!("Applied: {} -> {}", r.path.display(), r.output_path.display()); },
+                    Err(e) => { failed += 1; error!("Failed applying to {}: {e}", r.path.display()); }
+                }
+            }
+            info!("Apply finished: {ok} ok, {failed} failed.");
         },
         Actions::Audiofeatures { path, config, client_id, client_secret, no_subfolders } => {
             let file = File::open(config).expect("Failed reading config file!");
@@ -150,6 +174,131 @@ fn main() {
                 browser: *browser,
             }).expect("Failed starting the server");
         }
+    }
+}
+
+/// Run a dry-run: identify+match every file but write no audio. The proposed changes are
+/// written to `out_path` incrementally (every `save_every` files, on completion, and on
+/// SIGINT/SIGTERM). If `out_path` already exists, previously-matched files are skipped and
+/// only unmatched/failed/new files are reprocessed (resume). Note: SIGKILL cannot be caught.
+fn run_dry_run(config: TaggerConfig, mut files: Vec<PathBuf>, out_path: PathBuf, save_every: u32) {
+    // Resume: load existing results, keep them, skip files that already matched
+    let mut entries: HashMap<PathBuf, ChangeEntry> = HashMap::new();
+    let mut pre_matched = 0usize;
+    for e in load_existing_changes(&out_path) {
+        if e.matched { pre_matched += 1; }
+        entries.insert(e.path.clone(), e);
+    }
+    let before = files.len();
+    files.retain(|f| !entries.get(f).map(|e| e.matched).unwrap_or(false));
+    let skipped = before - files.len();
+    if skipped > 0 {
+        info!("Resuming from {}: {skipped} files already matched, {} to (re)process.", out_path.display(), files.len());
+    }
+    if files.is_empty() {
+        write_changes(&out_path, &config, &entries);
+        info!("Nothing to process - all files already matched in {}.", out_path.display());
+        return;
+    }
+
+    // Shared state so the processing loop and the signal handler can both flush
+    let state = Arc::new(Mutex::new(entries));
+
+    // Flush and exit on Ctrl-C / SIGTERM. (SIGKILL / `kill -9` cannot be intercepted.)
+    {
+        let state = state.clone();
+        let config = config.clone();
+        let out_path = out_path.clone();
+        let _ = ctrlc::set_handler(move || {
+            onetagger_autotag::STOP_TAGGING.store(true, std::sync::atomic::Ordering::SeqCst);
+            let entries = state.lock().unwrap();
+            warn!("Interrupted - saving {} results to {} ...", entries.len(), out_path.display());
+            write_changes(&out_path, &config, &entries);
+            std::process::exit(0);
+        });
+    }
+
+    let rx = Tagger::tag_files(&config, files, Arc::new(Mutex::new(None)));
+    let start = timestamp!();
+    let mut processed = 0u32;
+    for status in rx {
+        debug!("{status:?}");
+        let entry = change_entry_from_status(&status);
+        {
+            let mut entries = state.lock().unwrap();
+            match entries.get(&entry.path) {
+                // Keep an existing matched entry over a later unmatched one
+                Some(existing) if existing.matched && !entry.matched => {},
+                _ => { entries.insert(entry.path.clone(), entry); }
+            }
+        }
+        processed += 1;
+        if processed % save_every == 0 {
+            let entries = state.lock().unwrap();
+            write_changes(&out_path, &config, &entries);
+            info!("Saved progress: {} files recorded in {}", entries.len(), out_path.display());
+        }
+    }
+
+    // Final flush
+    let entries = state.lock().unwrap();
+    write_changes(&out_path, &config, &entries);
+    let matched = entries.values().filter(|e| e.matched).count();
+    info!("Dry run complete in {}s: {} files recorded ({matched} matched, {pre_matched} pre-existing). Wrote {}",
+        (timestamp!() - start) / 1000, entries.len(), out_path.display());
+    info!("Review/edit it, then run: onetagger-cli apply --changes {}", out_path.display());
+}
+
+/// Load entries from an existing changes file (returns empty on missing/unparseable file).
+fn load_existing_changes(out_path: &Path) -> Vec<ChangeEntry> {
+    if !out_path.exists() {
+        return vec![];
+    }
+    match File::open(out_path) {
+        Ok(f) => match serde_json::from_reader::<_, ChangesDocument>(f) {
+            Ok(doc) => doc.files,
+            Err(e) => { warn!("Existing changes file {} couldn't be parsed ({e}); starting fresh.", out_path.display()); vec![] }
+        },
+        Err(e) => { warn!("Couldn't open existing changes file {} ({e}); starting fresh.", out_path.display()); vec![] }
+    }
+}
+
+/// Atomically write the changes document (temp file + rename) so a kill mid-write can't corrupt it.
+fn write_changes(out_path: &Path, config: &TaggerConfig, entries: &HashMap<PathBuf, ChangeEntry>) {
+    let mut files: Vec<ChangeEntry> = entries.values().cloned().collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let doc = ChangesDocument::new(config.clone(), files);
+    let tmp = out_path.with_extension("tmp");
+    let file = match File::create(&tmp) {
+        Ok(f) => f,
+        Err(e) => { error!("Failed creating temp changes file {}: {e}", tmp.display()); return; }
+    };
+    if let Err(e) = serde_json::to_writer_pretty(file, &doc) {
+        error!("Failed writing changes file: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, out_path) {
+        error!("Failed finalizing changes file {}: {e}", out_path.display());
+    }
+}
+
+/// Build a ChangeEntry (for the dry-run changes document) from a tagging status
+fn change_entry_from_status(wrap: &TaggingStatusWrap) -> ChangeEntry {
+    let s = &wrap.status;
+    let matched = matches!(s.status, TaggingState::Ok);
+    let (output_path, art_url, changes) = match &s.changes {
+        Some(fc) => (fc.output_path.clone(), fc.art_url.clone(), fc.changes.clone()),
+        None => (s.path.clone(), None, Default::default()),
+    };
+    ChangeEntry {
+        path: s.path.clone(),
+        output_path,
+        matched,
+        platform: Some(wrap.platform.clone()),
+        accuracy: s.accuracy,
+        message: s.message.clone(),
+        art_url,
+        changes,
     }
 }
 
@@ -265,6 +414,32 @@ enum Actions {
         /// Tag on multiple platforms instead of the default fallback mode
         #[clap(long)]
         multiplatform: bool,
+
+        /// Modify the original files in place instead of writing `.tagged` copies (DESTRUCTIVE)
+        #[clap(long)]
+        in_place: bool,
+
+        /// Don't write any files; instead compute the proposed tag changes and save them to a JSON file
+        #[clap(long)]
+        dry_run: bool,
+
+        /// Output path for the --dry-run changes JSON (default: onetagger-changes.json)
+        #[clap(long)]
+        changes: Option<PathBuf>,
+
+        /// During --dry-run, write the changes file every N processed files (default: 25)
+        #[clap(long)]
+        save_every: Option<u32>,
+    },
+    /// Apply tag changes from a changes file produced by `autotagger --dry-run`
+    Apply {
+        /// Path to the changes JSON file
+        #[clap(short, long)]
+        changes: PathBuf,
+
+        /// Modify the original files in place instead of writing `.tagged` copies (DESTRUCTIVE)
+        #[clap(long)]
+        in_place: bool,
     },
     /// Start Audio Features in CLI mode
     Audiofeatures {
@@ -373,10 +548,11 @@ impl Actions {
     //. Create tagger config
     pub fn get_at_config(&self) -> Result<TaggerConfig, Error> {
         match self {
-            Actions::Autotagger { path, config, platforms, tags, id3v24, 
-                overwrite, threads, strictness, album_art_file, merge_genres, camelot, 
-                short_title, match_duration, max_duration_difference, match_by_id, enable_shazam, force_shazam, 
-                skip_tagged, parse_filename, filename_template, no_subfolders, only_year, multiplatform } => {
+            Actions::Autotagger { path, config, platforms, tags, id3v24,
+                overwrite, threads, strictness, album_art_file, merge_genres, camelot,
+                short_title, match_duration, max_duration_difference, match_by_id, enable_shazam, force_shazam,
+                skip_tagged, parse_filename, filename_template, no_subfolders, only_year, multiplatform,
+                in_place, dry_run, changes: _, save_every: _ } => {
 
                 // Load config
                 let mut config = if let Some(config_path) = config {
@@ -430,6 +606,9 @@ impl Actions {
                 if *no_subfolders {
                     config.include_subfolders = false;
                 }
+                // Non-destructive by default in the CLI: write to a `.tagged` copy unless --in-place
+                config.preserve_original = !*in_place;
+                config.dry_run = *dry_run;
                 return Ok(config);
             },
             _ => unreachable!()

@@ -6,7 +6,7 @@ use chrono::Local;
 use crossbeam_channel::{unbounded, Receiver};
 use onetagger_platforms::spotify::rspotify::model::{TrackId, Id};
 use serde::{Serialize, Deserialize};
-use onetagger_tagger::{AudioFileInfo, MatchingUtils};
+use onetagger_tagger::{AudioFileInfo, MatchingUtils, tagged_output_path};
 use onetagger_platforms::spotify::{Spotify, rspotify};
 use onetagger_platforms::spotify::rspotify::model::track::FullTrack;
 use onetagger_tag::{Tag, AudioFileFormat, FrameName, TagSeparators};
@@ -25,11 +25,22 @@ pub struct AudioFeaturesConfig {
     pub meta_tag: bool,
     pub skip_tagged: bool,
     pub include_subfolders: bool,
+    /// Write to a `.tagged` copy instead of modifying the original (CLI defaults this to true).
+    #[serde(default)]
+    pub preserve_original: bool,
+    /// Suffix inserted before the extension when `preserve_original` is set.
+    #[serde(default = "default_af_output_suffix")]
+    pub output_suffix: String,
+}
+
+/// Default value for [`AudioFeaturesConfig::output_suffix`]
+fn default_af_output_suffix() -> String {
+    ".tagged".to_string()
 }
 
 impl Default for AudioFeaturesConfig {
     fn default() -> Self {
-        Self { 
+        Self {
             path: None,
             main_tag: FrameName::same("AUDIO_FEATURES"),
             separators: Default::default(),
@@ -37,6 +48,8 @@ impl Default for AudioFeaturesConfig {
             meta_tag: true,
             skip_tagged: false,
             include_subfolders: true,
+            preserve_original: false,
+            output_suffix: default_af_output_suffix(),
         }
     }
 }
@@ -182,7 +195,7 @@ impl AudioFeatures {
                 let mut status = TaggingStatus {
                     status: TaggingState::Error,
                     path: file.to_owned(),
-                    message: None, accuracy: None, used_shazam: false, release_id: None, reason: None
+                    message: None, accuracy: None, used_shazam: false, release_id: None, reason: None, changes: None
                 };
                 // Load file
                 if let Ok(info) = AudioFileInfo::load_file(&file, None, None) {
@@ -296,8 +309,19 @@ impl AudioFeatures {
             tag.set_raw("1T_TAGGEDDATE", vec![format!("{}_AF", time.format("%Y-%m-%d %H:%M:%S"))], true);
         }
 
-        // Save
-        tag.save_file(path.as_ref())?;
+        // Save (optionally to a `.tagged` copy, preserving the original)
+        let target = if config.preserve_original {
+            tagged_output_path(path.as_ref(), &config.output_suffix)
+        } else {
+            path.as_ref().to_path_buf()
+        };
+        if target.as_path() != path.as_ref() {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(path.as_ref(), &target)?;
+        }
+        tag.save_file(&target)?;
         Ok(())
     }
 }

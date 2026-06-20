@@ -91,6 +91,43 @@ pub struct TaggerConfig {
     /// Platform specific. Format: `{ platform: { custom_option: value }}`
     pub custom: PlatformTaggerConfig,
     pub spotify: Option<SpotifyConfig>,
+
+    /// Write the tagged result to a copy next to the original (`song.mp3` -> `song.tagged.mp3`)
+    /// instead of modifying the original in place. CLI defaults this to true; GUI keeps it false.
+    #[serde(default)]
+    pub preserve_original: bool,
+    /// Suffix inserted before the extension when `preserve_original` is set.
+    #[serde(default = "default_output_suffix")]
+    pub output_suffix: String,
+    /// Compute the tag changes but do not write any audio files (used by the CLI `--dry-run`).
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// Default value for [`TaggerConfig::output_suffix`]
+fn default_output_suffix() -> String {
+    ".tagged".to_string()
+}
+
+/// Insert `suffix` before the file extension, e.g. `a/song.mp3` + `.tagged` -> `a/song.tagged.mp3`.
+/// Files without an extension just get the suffix appended.
+pub fn tagged_output_path(original: &std::path::Path, suffix: &str) -> PathBuf {
+    let stem = original.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let new_name = match original.extension() {
+        Some(ext) => format!("{stem}{suffix}.{}", ext.to_string_lossy()),
+        None => format!("{stem}{suffix}"),
+    };
+    match original.parent() {
+        Some(parent) => parent.join(new_name),
+        None => PathBuf::from(new_name),
+    }
+}
+
+/// Returns true if a path's stem already ends with the output suffix (i.e. it is a tagged copy).
+pub fn is_tagged_output_path(path: &std::path::Path, suffix: &str) -> bool {
+    path.file_stem()
+        .map(|s| s.to_string_lossy().ends_with(suffix))
+        .unwrap_or(false)
 }
 
 impl TaggerConfig {
@@ -169,7 +206,10 @@ impl Default for TaggerConfig {
             fetch_all_results: false,
             album_tagging: false,
             album_tagging_ratio: 0.5,
-            cover_filename: None
+            cover_filename: None,
+            preserve_original: false,
+            output_suffix: default_output_suffix(),
+            dry_run: false,
         }
     }
 }

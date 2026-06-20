@@ -25,7 +25,7 @@ use crossbeam_channel::{unbounded, Sender, Receiver};
 use onetagger_tag::{AudioFileFormat, Tag, Field, TagDate, CoverType, TagImpl, EXTENSIONS};
 use onetagger_shared::Settings;
 use onetagger_player::AudioSources;
-use onetagger_tagger::{Track, AudioFileInfo, TaggerConfig, StylesOptions, AutotaggerSource, AutotaggerSourceBuilder};
+use onetagger_tagger::{Track, AudioFileInfo, TaggerConfig, StylesOptions, AutotaggerSource, AutotaggerSourceBuilder, tagged_output_path};
 
 use crate::shazam::Shazam;
 mod shazam;
@@ -33,9 +33,11 @@ mod shazam;
 pub mod repo;
 pub mod platforms;
 pub mod audiofeatures;
+pub mod changes;
 
 // Re-exports
 pub use platforms::{AUTOTAGGER_PLATFORMS, AutotaggerPlatforms};
+pub use changes::{FileChanges, FieldChange, ChangeEntry, ChangesDocument};
 
 
 lazy_static::lazy_static! {
@@ -68,18 +70,23 @@ impl TaggerConfigExt for TaggerConfig {
 
 
 pub trait TrackImpl {
-    fn write_to_file(&self, path: impl AsRef<Path>, config: &TaggerConfig) -> Result<(), Error>;
+    fn write_to_file(&self, path: impl AsRef<Path>, config: &TaggerConfig) -> Result<FileChanges, Error>;
     fn download_art(&self, url: &str) -> Result<Option<Vec<u8>>, Error>;
     fn merge_styles(self, option: &StylesOptions) -> Self;
 }
 
 impl TrackImpl for Track {
-    // Write tags to file
-    fn write_to_file(&self, path: impl AsRef<Path>, config: &TaggerConfig) -> Result<(), Error> {        
+    // Write tags to file. Returns the computed tag changes. When `config.dry_run` is set the
+    // changes are computed but no audio file is written. When `config.preserve_original` is set
+    // the result is written to a `.tagged` copy, leaving the original untouched.
+    fn write_to_file(&self, path: impl AsRef<Path>, config: &TaggerConfig) -> Result<FileChanges, Error> {
         // Get tag
         let mut tag_wrap = Tag::load_file(&path, true)?;
         tag_wrap.set_separators(&config.separators);
         let format = tag_wrap.format();
+
+        // Snapshot current tags to diff against after applying the track
+        let before = tag_wrap.tag().all_tags();
 
         // Configure format specific
         if let Tag::ID3(t) = &mut tag_wrap {
@@ -98,6 +105,18 @@ impl TrackImpl for Track {
             }
         }
         
+        // Compute where the result will be written, and whether album art will be (re)written,
+        // before taking a mutable borrow of the tag.
+        let target = if config.preserve_original {
+            tagged_output_path(path.as_ref(), &config.output_suffix)
+        } else {
+            path.as_ref().to_path_buf()
+        };
+        let want_art = (config.overwrite_tag(SupportedTag::AlbumArt) || tag_wrap.tag().get_art().is_empty())
+            && self.art.is_some()
+            && config.tag_enabled(SupportedTag::AlbumArt);
+        let art_url = if want_art { self.art.clone() } else { None };
+
         let tag = tag_wrap.tag_mut();
         // Set tags
         if config.tag_enabled(SupportedTag::Title) {
@@ -275,9 +294,9 @@ impl TrackImpl for Track {
             tag.set_explicit(self.explicit.unwrap());
         }
 
-        // Album art
+        // Album art (skipped entirely during dry-run; the URL is recorded in the changes instead)
         let mut cover_data = None;
-        if (config.overwrite_tag(SupportedTag::AlbumArt) || tag.get_art().is_empty()) && self.art.is_some() && config.tag_enabled(SupportedTag::AlbumArt) {
+        if !config.dry_run && want_art {
             info!("Downloading art: {:?}", self.art);
             match self.download_art(self.art.as_ref().unwrap()) {
                 Ok(data) => {
@@ -306,40 +325,59 @@ impl TrackImpl for Track {
             tag.set_raw("1T_TAGGEDDATE", vec![format!("{}_AT", time.format("%Y-%m-%d %H:%M:%S"))], true);
         }
 
-        // LRC
-        if config.write_lrc && self.lyrics.is_some() {
-            let path = path.as_ref().with_extension("lrc");
-            if !path.exists() {
-                if let Some(lrc) = self.lyrics.as_ref().unwrap().generate_lrc(Some(&self), config.enhanced_lrc) {
-                    info!("Writing LRC");
-                    match std::fs::write(&path, lrc) {
-                        Ok(_) => {}
-                        Err(e) => warn!("Failed writing .LRC file to {:?} {}", path, e),
+        // Compute the diff between the original tags and what we applied in memory
+        let after = tag_wrap.tag().all_tags();
+        let changes = crate::changes::diff_tags(&before, &after);
+
+        // In dry-run mode we never touch the filesystem - only report the changes
+        if !config.dry_run {
+            // Write to a copy if preserving the original (tags get written into the copy)
+            if target.as_path() != path.as_ref() {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(path.as_ref(), &target)?;
+            }
+
+            // LRC (written next to the output file)
+            if config.write_lrc && self.lyrics.is_some() {
+                let lrc_path = target.with_extension("lrc");
+                if !lrc_path.exists() {
+                    if let Some(lrc) = self.lyrics.as_ref().unwrap().generate_lrc(Some(&self), config.enhanced_lrc) {
+                        info!("Writing LRC");
+                        match std::fs::write(&lrc_path, lrc) {
+                            Ok(_) => {}
+                            Err(e) => warn!("Failed writing .LRC file to {:?} {}", lrc_path, e),
+                        }
+                    }
+                }
+            }
+
+            // Save
+            tag_wrap.tag_mut().save_file(&target)?;
+
+            // Cover file
+            if let Some(cover_data) = cover_data {
+                match AudioFileInfo::load_file(&target, None, None) {
+                    Ok(info) => {
+                        let cover_path = get_cover_path(&info, target.parent().unwrap(), config);
+                        match std::fs::write(&cover_path, cover_data) {
+                            Ok(_) => debug!("Cover written to: {}", cover_path.display()),
+                            Err(e) => error!("Failed to write cover file: {e}"),
+                        }
+                    },
+                    Err(e) => {
+                        error!("Failed generating cover path: {e}");
                     }
                 }
             }
         }
 
-        // Save
-        tag.save_file(&path.as_ref())?;
-
-        // Cover file
-        if let Some(cover_data) = cover_data {
-            match AudioFileInfo::load_file(&path, None, None) {
-                Ok(info) => {
-                    let cover_path = get_cover_path(&info, path.as_ref().parent().unwrap(), config);
-                    match std::fs::write(&cover_path, cover_data) {
-                        Ok(_) => debug!("Cover written to: {}", cover_path.display()),
-                        Err(e) => error!("Failed to write cover file: {e}"),
-                    }
-                },
-                Err(e) => {
-                    error!("Failed generating cover path: {e}");
-                }
-            }
-        }
-
-        Ok(())
+        Ok(FileChanges {
+            output_path: target,
+            art_url,
+            changes,
+        })
     }
 
     // Download album art, None if invalid album art
@@ -603,7 +641,10 @@ pub struct TaggingStatus {
     pub accuracy: Option<f64>,
     pub used_shazam: bool,
     pub release_id: Option<String>,
-    pub reason: Option<MatchReason>
+    pub reason: Option<MatchReason>,
+    /// Computed tag changes (populated on success / dry-run, used by the CLI changes document)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes: Option<FileChanges>,
 }
 
 // Wrap for sending into UI
@@ -819,7 +860,8 @@ impl Tagger {
             message: None,
             used_shazam: false,
             release_id: None,
-            reason: None
+            reason: None,
+            changes: None,
         };
 
         // Filename template
@@ -933,9 +975,10 @@ impl Tagger {
         out.release_id = track.track.release_id.clone();
         out.reason = Some(track.reason);
         match track.track.merge_styles(&config.styles_options).write_to_file(&info.path, &config) {
-            Ok(_) => {
+            Ok(changes) => {
                 out.accuracy = Some(track.accuracy);
                 out.status = TaggingState::Ok;
+                out.changes = Some(changes);
             },
             Err(e) => {
                 error!("Failed writing tags to file: {e}");
@@ -1080,11 +1123,15 @@ impl Tagger {
             let track = tracks.remove(0);
             
             // TODO: Extend track if needed (?)
-            if let Err(e) = track.track.merge_styles(&config.styles_options).write_to_file(&info.path, &config) {
-                status.status = TaggingState::Error;
-                error!("Album tag writing tags failed: {e} ({})", file.display());
-            } else {
-                status.status = TaggingState::Ok;
+            match track.track.merge_styles(&config.styles_options).write_to_file(&info.path, &config) {
+                Ok(changes) => {
+                    status.status = TaggingState::Ok;
+                    status.changes = Some(changes);
+                },
+                Err(e) => {
+                    status.status = TaggingState::Error;
+                    error!("Album tag writing tags failed: {e} ({})", file.display());
+                }
             }
 
             // Save status
