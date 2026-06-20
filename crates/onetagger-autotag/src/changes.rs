@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::Error;
 use reqwest::StatusCode;
 use serde::{Serialize, Deserialize};
@@ -75,18 +77,46 @@ impl ChangesDocument {
     /// Apply every matched entry's changes to disk.
     /// When `in_place` is true the original file is modified; otherwise the entry's
     /// `output_path` (the `.tagged` copy) is written, leaving the original untouched.
-    pub fn apply(&self, in_place: bool) -> Vec<ApplyResult> {
-        let mut results = vec![];
-        for entry in &self.files {
-            // Nothing to do for unmatched files or entries with no changes
-            if !entry.matched || (entry.changes.is_empty() && entry.art_url.is_none()) {
-                continue;
-            }
-            let target = if in_place { entry.path.clone() } else { entry.output_path.clone() };
-            let result = self.apply_entry(entry, &target);
-            results.push(ApplyResult { path: entry.path.clone(), output_path: target, result });
+    /// Apply the changes. `threads` limits parallelism; when `None` the changes file's
+    /// configured thread count is used. The count is always capped at the amount of work.
+    pub fn apply(&self, in_place: bool, threads: Option<usize>) -> Vec<ApplyResult> {
+        // Entries actually worth writing (matched, with something to change)
+        let work: Vec<&ChangeEntry> = self.files.iter()
+            .filter(|e| e.matched && !(e.changes.is_empty() && e.art_url.is_none()))
+            .collect();
+        if work.is_empty() {
+            return vec![];
         }
-        results
+
+        // Each entry writes its own file (and downloads its own art), so this is fully parallel.
+        // Use the requested limit (or the changes file's configured count); cap at the work amount.
+        let requested = threads.unwrap_or(self.config.threads as usize);
+        let threads = requested.max(1).min(work.len());
+        let next = AtomicUsize::new(0);
+        let results = Mutex::new(Vec::with_capacity(work.len()));
+
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                scope.spawn(|| {
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        if i >= work.len() {
+                            break;
+                        }
+                        let entry = work[i];
+                        let target = if in_place { entry.path.clone() } else { entry.output_path.clone() };
+                        let result = self.apply_entry(entry, &target);
+                        results.lock().unwrap().push(ApplyResult {
+                            path: entry.path.clone(),
+                            output_path: target,
+                            result,
+                        });
+                    }
+                });
+            }
+        });
+
+        results.into_inner().unwrap()
     }
 
     /// Apply one entry to `target`.

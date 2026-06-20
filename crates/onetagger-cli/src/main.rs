@@ -77,10 +77,10 @@ fn main() {
             }
         },
         // Apply changes from a changes file produced by `autotagger --dry-run`
-        Actions::Apply { changes, in_place } => {
+        Actions::Apply { changes, in_place, threads } => {
             let file = File::open(changes).expect("Failed opening changes file!");
             let doc: ChangesDocument = serde_json::from_reader(file).expect("Failed parsing changes file!");
-            let results = doc.apply(*in_place);
+            let results = doc.apply(*in_place, *threads);
             let (mut ok, mut failed) = (0, 0);
             for r in &results {
                 match &r.result {
@@ -395,7 +395,7 @@ enum Actions {
         overwrite: bool,
 
         /// How many threads to use for the searching & matching process
-        #[clap(long)]
+        #[clap(short = 'j', long)]
         threads: Option<u16>,
 
         /// How strict should the matching be? Use: 0 - 100, Default: 80 (%).
@@ -500,6 +500,10 @@ enum Actions {
         /// Modify the original files in place instead of writing `.tagged` copies (DESTRUCTIVE)
         #[clap(long)]
         in_place: bool,
+
+        /// Max files to write in parallel (default: the thread count stored in the changes file)
+        #[clap(short = 'j', long)]
+        threads: Option<usize>,
     },
     /// List audio files in a directory that are not yet successfully processed in a changes file (prints JSON)
     Unprocessed {

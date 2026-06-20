@@ -132,6 +132,10 @@ The CLI decouples matching from writing so changes can be reviewed and hand-edit
 3. `onetagger-cli apply --changes out.json [--in-place]` writes exactly those values
    (`set_raw(new, overwrite=true)`, plus art fetched from `artUrl`), to the `.tagged` copy by
    default or the original with `--in-place`. No platform re-querying — fast and offline.
+   Apply runs **in parallel** (each entry writes its own file and fetches its own art, so
+   there's no shared state) using `std::thread::scope` with an `AtomicUsize` work-stealing
+   index (`ChangesDocument::apply`). Parallelism = `apply --threads <N>`, defaulting to the
+   thread count stored in the changes file, always capped at the number of files to write.
 
 `onetagger-cli unprocessed --changes out.json --path <dir>` lists, as pretty JSON on stdout,
 the audio files under `<dir>` that do **not** have a successful (matched) entry in the changes
