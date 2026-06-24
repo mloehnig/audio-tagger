@@ -43,8 +43,14 @@ pub fn default_thread_count() -> usize {
     (cores * 2).max(2)
 }
 
-/// Setup onetagger logging and panic hooks
+/// Backwards-compatible entrypoint: logs to both console (stderr) and the log file.
 pub fn setup() {
+    setup_logging(true);
+}
+
+/// Set up logging. When `to_console` is false, logs go to the log file only — used by the
+/// TUI so log lines don't corrupt the alternate-screen UI.
+pub fn setup_logging(to_console: bool) {
     // Fern logger setup
     let colors = ColoredLevelConfig::new()
         .trace(Color::White)
@@ -54,7 +60,7 @@ pub fn setup() {
         .error(Color::Red);
     let level = if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Info };
 
-    Dispatch::new()
+    let mut dispatch = Dispatch::new()
         .level(LevelFilter::Warn)
         .level_for("onetagger_shared", level)
         .level_for("onetagger_autotag", level)
@@ -65,12 +71,16 @@ pub fn setup() {
         .level_for("onetagger_tag", level)
         .level_for("onetagger_cli", level)
         .level_for("onetagger_tagger", level)
+        .level_for("onetagger_tui", level)
         // Custom platforms
         .level_for("onetagger_custom_platform", level)
         // Songrec fork log
-        .level_for("songrec", level)
-        // Colored
-        .chain(
+        .level_for("songrec", level);
+
+    // Colored console chain (stderr) — skipped when `to_console` is false so the TUI's
+    // alternate-screen UI isn't corrupted by log lines.
+    if to_console {
+        dispatch = dispatch.chain(
             Dispatch::new()
                 .format(move |out, message, record| {
                     out.finish(format_args!(
@@ -84,7 +94,10 @@ pub fn setup() {
                 // Logs go to stderr so stdout is reserved for actual command output
                 // (e.g. the JSON printed by the `unprocessed` / config subcommands).
                 .chain(std::io::stderr())
-        )
+        );
+    }
+
+    dispatch
         // Log file
         .chain(
             Dispatch::new()
