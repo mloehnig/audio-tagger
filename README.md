@@ -45,6 +45,12 @@ onetagger-cli <command> [options]
 Commands: `autotagger`, `apply`, `unprocessed`, `audiofeatures`, `authorize-spotify`, `renamer`.
 Run `onetagger-cli <command> --help` for all options.
 
+### Interactive TUI
+
+`onetagger-cli tui` opens an interactive terminal UI: a menu, an auto-tag form (defaults
+pre-filled from `config.toml`), a live progress dashboard, and a Settings screen to edit your
+`config.toml` in-place (Ctrl-S to save). Requires an interactive terminal.
+
 ### Configuration
 
 Defaults and credentials can be stored in a user config file at
