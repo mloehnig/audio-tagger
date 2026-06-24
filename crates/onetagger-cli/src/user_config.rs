@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use onetagger_shared::Settings;
+use convert_case::{Casing, Case};
+use onetagger_tagger::{TaggerConfig, SupportedTag};
 
 /// Parsed `~/.config/onetagger/config.toml`. All fields optional so partial files work.
 #[derive(Debug, Default, Deserialize)]
@@ -64,6 +66,31 @@ pub fn load() -> UserConfig {
     }
 }
 
+/// Parse canonical tag names (e.g. "albumArt") into SupportedTag, warning on unknowns.
+pub fn parse_tags(tags: &[String]) -> Vec<SupportedTag> {
+    tags.iter().filter_map(|t| {
+        match serde_json::from_str(&format!("\"{}\"", t.to_case(Case::Camel))) {
+            Ok(tag) => Some(tag),
+            Err(_) => { warn!("Invalid tag: {t}"); None }
+        }
+    }).collect()
+}
+
+impl Defaults {
+    /// Apply the simple field defaults onto a config. Does NOT handle threads or in_place
+    /// (those interact with flags / the 2x-cores fallback and are resolved in get_at_config).
+    pub fn apply_to(&self, config: &mut TaggerConfig) {
+        if let Some(p) = &self.platforms { config.platforms = p.clone(); }
+        if let Some(t) = &self.tags { config.tags = parse_tags(t); }
+        if let Some(s) = self.strictness { if s <= 100 { config.strictness = s as f64 / 100.0; } }
+        if let Some(s) = &self.output_suffix { config.output_suffix = s.clone(); }
+        if let Some(v) = self.overwrite { config.overwrite = v; }
+        if let Some(v) = self.enable_shazam { config.enable_shazam = v; }
+        if let Some(v) = self.force_shazam { config.force_shazam = v; }
+        if let Some(v) = self.include_subfolders { config.include_subfolders = v; }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +141,29 @@ include_subfolders = false
         let cfg: UserConfig = toml::from_str("[spotify]\nclient_id = \"x\"\nclient_secret = \"y\"\n").unwrap();
         assert_eq!(cfg.spotify.unwrap().client_id, "x");
         assert!(cfg.defaults.threads.is_none());
+    }
+
+    #[test]
+    fn apply_to_sets_fields() {
+        use onetagger_tagger::{TaggerConfig, SupportedTag};
+        let mut config = TaggerConfig::default();
+        let defaults = Defaults {
+            platforms: Some(vec!["deezer".to_string()]),
+            tags: Some(vec!["title".to_string(), "albumArt".to_string()]),
+            strictness: Some(50),
+            output_suffix: Some(".x".to_string()),
+            overwrite: Some(false),
+            enable_shazam: Some(true),
+            include_subfolders: Some(false),
+            ..Default::default()
+        };
+        defaults.apply_to(&mut config);
+        assert_eq!(config.platforms, vec!["deezer".to_string()]);
+        assert_eq!(config.tags, vec![SupportedTag::Title, SupportedTag::AlbumArt]);
+        assert_eq!(config.strictness, 0.5);
+        assert_eq!(config.output_suffix, ".x");
+        assert_eq!(config.overwrite, false);
+        assert_eq!(config.enable_shazam, true);
+        assert_eq!(config.include_subfolders, false);
     }
 }
