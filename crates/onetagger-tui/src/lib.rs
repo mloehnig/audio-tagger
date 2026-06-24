@@ -21,7 +21,7 @@ pub fn run() -> Result<()> {
     info!("TUI starting");
     let mut tui = terminal::init()?;
     let result = run_app(&mut tui);
-    terminal::restore()?;
+    let _ = terminal::restore();
     result
 }
 

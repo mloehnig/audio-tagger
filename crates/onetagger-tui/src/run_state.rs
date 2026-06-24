@@ -19,6 +19,7 @@ pub struct RunState {
     pub skipped: u32,
     pub platform: String,
     pub recent: VecDeque<RecentItem>,
+    #[allow(dead_code)] // TODO: elapsed/ETA display (see SP1 dashboard mockup)
     pub started_at: Instant,
     pub done: bool,
     pub stopping: bool,
@@ -35,6 +36,7 @@ impl RunState {
         }
     }
 
+    #[cfg(test)]
     pub fn total(&self) -> u32 { self.ok + self.failed + self.skipped }
 
     /// Fold one engine status into the state.
