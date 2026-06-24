@@ -43,6 +43,8 @@ fn main() {
     info!("\n\nStarting OneTagger v{VERSION} Commit: {COMMIT} OS: {}\n\n", std::env::consts::OS);
 
 
+    let user_config = user_config::load();
+
     let action = cli.action.unwrap();
     match &action {
         Actions::Autotagger { path, dry_run, changes, save_every, shazam_concurrency, shazam_interval_ms, acoustid_api_key, .. } => {
@@ -189,6 +191,15 @@ fn main() {
             }
 
             renamer.rename(&names, &config).expect("Failed renaming!");
+        },
+        Actions::Config { action } => {
+            match action {
+                ConfigAction::Path => println!("{}", user_config::path().display()),
+                ConfigAction::Init { force } => match user_config::write_template(*force) {
+                    Ok(p) => info!("Wrote config template to {}", p.display()),
+                    Err(e) => { error!("{e}"); std::process::exit(1); }
+                },
+            }
         },
     }
 }
@@ -561,6 +572,23 @@ enum Actions {
         /// Keep original subfolders
         #[clap(long)]
         keep_subfolders: bool,
+    },
+    /// Manage the user configuration file (~/.config/onetagger/config.toml)
+    Config {
+        #[clap(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum ConfigAction {
+    /// Print the path to the user config file
+    Path,
+    /// Write a commented config template
+    Init {
+        /// Overwrite an existing config file
+        #[clap(long)]
+        force: bool,
     },
 }
 
