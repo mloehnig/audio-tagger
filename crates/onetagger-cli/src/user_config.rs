@@ -82,7 +82,10 @@ impl Defaults {
     pub fn apply_to(&self, config: &mut TaggerConfig) {
         if let Some(p) = &self.platforms { config.platforms = p.clone(); }
         if let Some(t) = &self.tags { config.tags = parse_tags(t); }
-        if let Some(s) = self.strictness { if s <= 100 { config.strictness = s as f64 / 100.0; } }
+        if let Some(s) = self.strictness {
+            if s <= 100 { config.strictness = s as f64 / 100.0; }
+            else { warn!("Invalid strictness in config: {s} (must be 0-100)"); }
+        }
         if let Some(s) = &self.output_suffix { config.output_suffix = s.clone(); }
         if let Some(v) = self.overwrite { config.overwrite = v; }
         if let Some(v) = self.enable_shazam { config.enable_shazam = v; }
@@ -118,7 +121,7 @@ pub const TEMPLATE: &str = r#"# OneTagger CLI configuration
 
 /// Write the template to the config path. Refuses to overwrite unless `force`. Sets 0600 on Unix.
 pub fn write_template(force: bool) -> Result<PathBuf, anyhow::Error> {
-    let p = path();
+    let p = Settings::get_folder()?.join("config.toml");
     if p.exists() && !force {
         anyhow::bail!("Config already exists at {} (use --force to overwrite)", p.display());
     }
