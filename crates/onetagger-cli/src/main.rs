@@ -2,6 +2,7 @@
 #[macro_use] extern crate onetagger_shared;
 
 mod spotify_auth;
+mod user_config;
 
 use anyhow::Error;
 use std::fs::File;
