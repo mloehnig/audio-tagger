@@ -45,6 +45,29 @@ onetagger-cli <command> [options]
 Commands: `autotagger`, `apply`, `unprocessed`, `audiofeatures`, `authorize-spotify`, `renamer`.
 Run `onetagger-cli <command> --help` for all options.
 
+### Configuration
+
+Defaults and credentials can be stored in a user config file at
+`~/.config/onetagger/config.toml` (run `onetagger-cli config path` to see the exact location;
+`onetagger-cli config init` writes a commented template). CLI flags always override the file;
+precedence is built-in defaults < `[defaults]` < `--config` file < flags.
+
+```toml
+[spotify]
+client_id = "..."
+client_secret = "..."
+
+acoustid_api_key = "..."
+
+[defaults]
+platforms = ["deezer", "beatport"]
+tags = ["title", "artist", "genre", "bpm"]
+threads = 8
+```
+
+Boolean options set in `[defaults]` (e.g. `enable_shazam = true`) can only be turned *off*
+again by editing the file — the flags only turn options on.
+
 ### Auto-tagging
 
 ```
