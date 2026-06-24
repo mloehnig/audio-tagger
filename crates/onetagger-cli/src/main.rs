@@ -52,9 +52,15 @@ fn main() {
             debug!("{:?}", config);
 
             // Configure the global Shazam rate limit before any recognition starts
-            onetagger_autotag::configure_shazam(shazam_concurrency.unwrap_or(3), shazam_interval_ms.unwrap_or(350));
-            // Enable AcoustID fallback if a key is provided (flag or ACOUSTID_API_KEY env var)
-            let acoustid_key = acoustid_api_key.clone().or_else(|| std::env::var("ACOUSTID_API_KEY").ok());
+            onetagger_autotag::configure_shazam(
+                shazam_concurrency.or(user_config.defaults.shazam_concurrency).unwrap_or(3),
+                shazam_interval_ms.or(user_config.defaults.shazam_interval_ms).unwrap_or(350),
+            );
+            // AcoustID key: flag > ACOUSTID_API_KEY env > user config
+            let acoustid_key = acoustid_api_key.clone()
+                .or_else(|| std::env::var("ACOUSTID_API_KEY").ok())
+                .or_else(|| user_config.acoustid_api_key.clone())
+                .filter(|k| !k.trim().is_empty());
             onetagger_autotag::configure_acoustid(acoustid_key);
 
             // Get files
@@ -158,9 +164,18 @@ fn main() {
         },
         // Spotify OAuth flow
         Actions::AuthorizeSpotify { client_id, client_secret } => {
-            let (auth_url, client) = Spotify::generate_auth_url(&client_id, &client_secret).expect("Failed generating auth URL!");
+            // Resolve creds: flags override the user config [spotify] section
+            let id = client_id.clone().or_else(|| user_config.spotify.as_ref().map(|s| s.client_id.clone()));
+            let secret = client_secret.clone().or_else(|| user_config.spotify.as_ref().map(|s| s.client_secret.clone()));
+            let (id, secret) = match (id, secret) {
+                (Some(i), Some(s)) if !i.is_empty() && !s.is_empty() => (i, s),
+                _ => {
+                    error!("Missing Spotify credentials. Pass --client-id/--client-secret or set [spotify] in {}", user_config::path().display());
+                    std::process::exit(1);
+                }
+            };
+            let (auth_url, client) = Spotify::generate_auth_url(&id, &secret).expect("Failed generating auth URL!");
             println!("\nPlease go to the following URL and authorize OneTagger:\n{auth_url}\n");
-            // Start a minimal local callback server to capture the redirect, then authorize
             spotify_auth::spawn_callback_server();
             let _spotify = Spotify::auth_server(client).expect("Spotify authentication failed!");
             info!("Successfully authorized Spotify!");
@@ -528,13 +543,13 @@ enum Actions {
     },
     /// Authorize Spotify and cache the token
     AuthorizeSpotify {
-        /// Spotify Client ID
+        /// Spotify Client ID (falls back to the user config [spotify] section)
         #[clap(long)]
-        client_id: String,
+        client_id: Option<String>,
 
-        /// Spotify Client Secret
+        /// Spotify Client Secret (falls back to the user config [spotify] section)
         #[clap(long)]
-        client_secret: String,
+        client_secret: Option<String>,
     },
     Renamer {
         /// Path to input files
