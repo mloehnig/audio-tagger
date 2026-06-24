@@ -3702,7 +3702,6 @@ dependencies = [
 [[package]]
 name = "songrec"
 version = "0.2.1"
-source = "git+https://github.com/Marekkon5/SongRec.git#7b964ba88dccbc5380dcff274fcdcce023330239"
 dependencies = [
  "base64",
  "byteorder",

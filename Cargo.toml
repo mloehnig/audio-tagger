@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/onetagger-cli",
+    "crates/songrec",
     "crates/onetagger-tag",
     "crates/onetagger-shared",
     "crates/onetagger-player",

@@ -28,7 +28,7 @@ reqwest = { version = "0.12", features = [
     "rustls-tls",
 ], default-features = false }
 
-songrec = { git = "https://github.com/Marekkon5/SongRec.git" }
+songrec = { path = "../songrec" }
 
 onetagger-tag = { path = "../onetagger-tag" }
 onetagger-tagger = { path = "../onetagger-tagger" }
