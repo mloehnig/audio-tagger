@@ -15,7 +15,7 @@ use onetagger_renamer::{RenamerConfig, Renamer, TemplateParser};
 use onetagger_shared::{VERSION, COMMIT};
 use onetagger_autotag::audiofeatures::{AudioFeaturesConfig, AudioFeatures};
 use onetagger_autotag::{Tagger, TaggerConfigExt, AudioFileInfoImpl, ChangeEntry, ChangesDocument, TaggingState, TaggingStatusWrap};
-use onetagger_tagger::{TaggerConfig, AudioFileInfo, SupportedTag, is_tagged_output_path};
+use onetagger_tagger::{TaggerConfig, AudioFileInfo, SupportedTag, is_tagged_output_path, SpotifyConfig};
 use std::collections::HashMap;
 
 fn main() {
@@ -48,7 +48,7 @@ fn main() {
     let action = cli.action.unwrap();
     match &action {
         Actions::Autotagger { path, dry_run, changes, save_every, shazam_concurrency, shazam_interval_ms, acoustid_api_key, .. } => {
-            let config = action.get_at_config().expect("Failed loading config file!");
+            let config = action.get_at_config(&user_config).expect("Failed loading config file!");
             debug!("{:?}", config);
 
             // Configure the global Shazam rate limit before any recognition starts
@@ -606,7 +606,7 @@ macro_rules! config_option {
 
 impl Actions {
     //. Create tagger config
-    pub fn get_at_config(&self) -> Result<TaggerConfig, Error> {
+    pub fn get_at_config(&self, user: &user_config::UserConfig) -> Result<TaggerConfig, Error> {
         match self {
             Actions::Autotagger { path, config, platforms, tags, id3v24,
                 overwrite, threads, strictness, album_art_file, merge_genres, camelot,
@@ -625,6 +625,14 @@ impl Actions {
 
                 // Overrides
                 config.path = Some(path.to_owned());
+
+                // Layer user-config defaults under the CLI flags (flags applied below still win).
+                // Skipped when an explicit --config file is given: that file is authoritative
+                // (precedence: built-in < [defaults] < --config < flags).
+                if !has_config_file {
+                    user.defaults.apply_to(&mut config);
+                }
+
                 if let Some(platforms) = platforms {
                     config.platforms = platforms.split(",").map(String::from).collect();
                 }
@@ -652,7 +660,8 @@ impl Actions {
                 if let Some(threads) = threads {
                     config.threads = *threads;
                 } else if !has_config_file {
-                    config.threads = onetagger_shared::default_thread_count() as u16;
+                    config.threads = user.defaults.threads
+                        .unwrap_or_else(|| onetagger_shared::default_thread_count() as u16);
                 }
                 if let Some(strictness) = strictness {
                     if *strictness > 100 {
@@ -671,8 +680,22 @@ impl Actions {
                     config.include_subfolders = false;
                 }
                 // Non-destructive by default in the CLI: write to a `.tagged` copy unless --in-place
-                config.preserve_original = !*in_place;
+                let cfg_in_place = !has_config_file && user.defaults.in_place.unwrap_or(false);
+                config.preserve_original = !(*in_place || cfg_in_place);
                 config.dry_run = *dry_run;
+
+                // Spotify credentials from user config (unless a --config file already set them)
+                if config.spotify.is_none() {
+                    if let Some(s) = &user.spotify {
+                        if !s.client_id.is_empty() && !s.client_secret.is_empty() {
+                            config.spotify = Some(SpotifyConfig {
+                                client_id: s.client_id.clone(),
+                                client_secret: s.client_secret.clone(),
+                            });
+                        }
+                    }
+                }
+
                 return Ok(config);
             },
             _ => unreachable!()
