@@ -19,7 +19,7 @@ struct FileRoot {
 
 /// Load `[defaults]` from the user config file; returns defaults if absent/malformed.
 pub fn load_defaults() -> TuiDefaults {
-    let path = match Settings::get_folder() { Ok(d) => d.join("config.toml"), Err(_) => return TuiDefaults::default() };
+    let path = config_path();
     let Ok(text) = std::fs::read_to_string(&path) else { return TuiDefaults::default() };
     match toml::from_str::<FileRoot>(&text) {
         Ok(root) => root.defaults,
@@ -45,25 +45,35 @@ pub fn config_text() -> String {
     std::fs::read_to_string(config_path()).unwrap_or_else(|_| CONFIG_TEMPLATE.to_string())
 }
 
-/// Write `text` to `path` and set 0600 on Unix. Factored out so it is unit-testable.
+/// Write `text` to `path`, creating the file with `0600` on Unix (so secrets are never
+/// briefly world-readable) and tightening an existing file's perms too. Factored out so it
+/// is unit-testable.
 pub fn write_with_perms(path: &Path, text: &str) -> std::io::Result<()> {
-    std::fs::write(path, text)?;
-    set_owner_only(path);
-    Ok(())
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(text.as_bytes())?;
+        // `.mode()` only applies when the file is created; tighten an already-existing file too.
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, text)
+    }
 }
 
 /// Save config text to the user config path.
 pub fn save(text: &str) -> std::io::Result<()> {
     write_with_perms(&config_path(), text)
 }
-
-#[cfg(unix)]
-fn set_owner_only(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-}
-#[cfg(not(unix))]
-fn set_owner_only(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {
