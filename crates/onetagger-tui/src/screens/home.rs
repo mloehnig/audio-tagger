@@ -24,6 +24,7 @@ impl HomeScreen {
             KeyCode::Down => { if self.selected + 1 < ITEMS.len() { self.selected += 1; } Action::None }
             KeyCode::Enter => match ITEMS[self.selected] {
                 "Auto-tag" => Action::Push(Screen::AutotaggerForm),
+                "Settings" => Action::Push(Screen::Settings),
                 "Quit" => Action::Quit,
                 _ => Action::None, // enabled in later sub-projects
             },

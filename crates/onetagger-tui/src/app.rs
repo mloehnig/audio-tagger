@@ -3,6 +3,7 @@ pub enum Screen {
     Home,
     AutotaggerForm,
     Dashboard,
+    Settings,
 }
 
 /// Messages a screen's key handler can return; applied centrally by `App`.

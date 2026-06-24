@@ -15,6 +15,7 @@ use onetagger_autotag::{Tagger, TaggingStatusWrap};
 use crate::app::{Action, App, Screen};
 use crate::run_state::RunState;
 use crate::screens::{home::HomeScreen, autotagger_form::AutotaggerForm};
+use crate::screens::settings::SettingsScreen;
 
 pub fn run() -> Result<()> {
     info!("TUI starting");
@@ -29,6 +30,7 @@ fn run_app(tui: &mut terminal::Tui) -> Result<()> {
     let mut home = HomeScreen::default();
     let mut form: Option<AutotaggerForm> = None;
     let mut run: Option<RunState> = None;
+    let mut settings: Option<SettingsScreen> = None;
     let mut rx: Option<crossbeam_channel::Receiver<TaggingStatusWrap>> = None;
 
     while !app.should_quit {
@@ -39,6 +41,7 @@ fn run_app(tui: &mut terminal::Tui) -> Result<()> {
                 Screen::Home => home.render(f, area),
                 Screen::AutotaggerForm => { if let Some(form) = &form { form.render(f, area); } }
                 Screen::Dashboard => { if let Some(run) = &run { screens::dashboard::render(f, area, run); } }
+                Screen::Settings => { if let Some(s) = &settings { s.render(f, area); } }
             }
         })?;
 
@@ -62,11 +65,16 @@ fn run_app(tui: &mut terminal::Tui) -> Result<()> {
                     Screen::Home => home.handle_key(key),
                     Screen::AutotaggerForm => form.as_mut().map(|f| f.handle_key(key)).unwrap_or(Action::None),
                     Screen::Dashboard => dashboard_keys(key, run.as_mut()),
+                    Screen::Settings => settings.as_mut().map(|s| s.handle_key(key)).unwrap_or(Action::None),
                 };
                 match action {
                     Action::Push(Screen::AutotaggerForm) => {
                         form = Some(AutotaggerForm::new(config::load_defaults()));
                         app.apply_action(Action::Push(Screen::AutotaggerForm));
+                    }
+                    Action::Push(Screen::Settings) => {
+                        settings = Some(SettingsScreen::new());
+                        app.apply_action(Action::Push(Screen::Settings));
                     }
                     Action::StartAutotag(config, files) => {
                         let mut state = RunState::new();
