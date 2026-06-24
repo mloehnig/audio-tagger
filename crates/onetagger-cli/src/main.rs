@@ -1,8 +1,9 @@
 #[macro_use] extern crate log;
 #[macro_use] extern crate onetagger_shared;
 
+mod spotify_auth;
+
 use anyhow::Error;
-use onetagger_ui::StartContext;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -153,32 +154,13 @@ fn main() {
             info!("Tagging finished, took: {} seconds.", (timestamp!() - start) / 1000);
         },
         // Spotify OAuth flow
-        Actions::AuthorizeSpotify { client_id, client_secret, prompt, expose } => {
+        Actions::AuthorizeSpotify { client_id, client_secret } => {
             let (auth_url, client) = Spotify::generate_auth_url(&client_id, &client_secret).expect("Failed generating auth URL!");
-            println!("\nPlease go to the following URL and authorize 1T:\n{auth_url}");
-            // should cache the token
-            match prompt {
-                true => {
-                    println!("\nEnter the URL you were redirected to and press enter: ");
-                    let mut url = String::new();
-                    std::io::stdin().read_line(&mut url).expect("Couldn't read from stdin!");
-                    let _spotify = Spotify::auth_token_code(client, url.trim()).expect("Spotify authentication failed!");
-                },
-                false => {
-                    let expose = *expose;
-                    std::thread::spawn(move || {
-                        onetagger_ui::start_all(StartContext {
-                            server_mode: true,
-                            start_path: None,
-                            expose,
-                            browser: false,
-                        }).expect("Failed starting server!");
-                    });
-                    let _spotify = Spotify::auth_server(client).expect("Spotify authentication failed!");
-                }
-            }
-            info!("Succesfully authorized Spotify!");
-            // Exit because of webserver
+            println!("\nPlease go to the following URL and authorize OneTagger:\n{auth_url}\n");
+            // Start a minimal local callback server to capture the redirect, then authorize
+            spotify_auth::spawn_callback_server();
+            let _spotify = Spotify::auth_server(client).expect("Spotify authentication failed!");
+            info!("Successfully authorized Spotify!");
             std::process::exit(0);
         },
         // Renamer
@@ -207,15 +189,6 @@ fn main() {
 
             renamer.rename(&names, &config).expect("Failed renaming!");
         },
-        // Server mode
-        Actions::Server { expose, path, browser } => {
-            onetagger_ui::start_all(StartContext {
-                server_mode: true,
-                start_path: path.clone().map(String::from),
-                expose: *expose,
-                browser: *browser,
-            }).expect("Failed starting the server");
-        }
     }
 }
 
@@ -550,14 +523,6 @@ enum Actions {
         /// Spotify Client Secret
         #[clap(long)]
         client_secret: String,
-
-        /// Run Spotify authentication callback server on `0.0.0.0`
-        #[clap(long)]
-        expose: bool,
-
-        /// Don't start server, prompt for the redirected URL 
-        #[clap(long)]
-        prompt: bool
     },
     Renamer {
         /// Path to input files
@@ -596,18 +561,6 @@ enum Actions {
         #[clap(long)]
         keep_subfolders: bool,
     },
-    /// Start OneTagger server mode
-    Server {
-        /// Expose the internal servers (WARNING: Unsecure)
-        #[clap(long, short)]
-        expose: bool,
-        /// Specify initial path to use in UI
-        #[clap(long, short)]
-        path: Option<String>,
-        /// Open web browser
-        #[clap(long, short)]
-        browser: bool,
-    }
 }
 
 /// For easily generating CLI -> config

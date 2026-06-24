@@ -65,8 +65,6 @@ pub fn setup() {
         .level_for("onetagger_tag", level)
         .level_for("onetagger_cli", level)
         .level_for("onetagger_tagger", level)
-        .level_for("onetagger_ui", level)
-        .level_for("onetagger", level)
         // Custom platforms
         .level_for("onetagger_custom_platform", level)
         // Songrec fork log

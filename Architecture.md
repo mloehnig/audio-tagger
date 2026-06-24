@@ -2,63 +2,56 @@
 
 ## What the project is
 
-**OneTagger** is a cross-platform desktop application for **tagging music libraries**, aimed primarily at **DJs**. Its core value proposition: pull rich, accurate metadata from music databases and write it into your audio files in a format DJ software understands.
+**OneTagger** is a cross-platform **command-line** tool for **tagging music libraries**, aimed primarily at **DJs**. Its core value proposition: pull rich, accurate metadata from music databases and write it into your audio files in a format DJ software understands.
 
-**Goal:** automate and streamline music metadata management — fetch tags (genre, BPM, key, label, release date, cover art, lyrics, ISRC, etc.) from many online sources, and provide manual editing tools for the cases automation can't cover.
+> This is a **CLI-only** fork. The original project shipped a desktop GUI (Wry webview) and a Vue/Quasar web UI served by an Axum server (`onetagger-ui`); those have been removed. All functionality runs through the `onetagger-cli` binary.
 
-It supports **MP3, AIFF, FLAC, M4A (AAC/ALAC), WAV, OGG**, and integrates with **Beatport, Traxsource, Juno Download, Discogs, MusicBrainz, Spotify, Deezer, iTunes, Bandcamp, Musixmatch, Beatsource, BPMSupreme**, plus **Shazam** audio fingerprinting.
+**Goal:** automate and streamline music metadata management — fetch tags (genre, BPM, key, label, release date, cover art, lyrics, ISRC, etc.) from many online sources.
 
-The five user-facing tools:
-1. **Auto Tag** — batch metadata fetching from platforms
-2. **Audio Features** — Spotify danceability/energy/etc. by ISRC
-3. **Quick Tag** — keyboard-driven fast tagging (mood/genre/energy)
-4. **Tag Editor** — detailed single-file editor
-5. **Renamer** — template-DSL batch file renaming
+It supports **MP3, AIFF, FLAC, M4A (AAC/ALAC), WAV, OGG**, and integrates with **Beatport, Traxsource, Juno Download, Discogs, MusicBrainz, Spotify, Deezer, iTunes, Bandcamp, Musixmatch, Beatsource, BPMSupreme**, plus **Shazam** and **AcoustID** audio fingerprinting.
+
+The CLI subcommands:
+1. **autotagger** — batch metadata fetching from platforms (with `--dry-run`)
+2. **apply** — write a reviewed/edited changes file produced by `--dry-run`
+3. **unprocessed** — list files not yet successfully tagged (JSON)
+4. **audiofeatures** — Spotify danceability/energy/etc. by ISRC
+5. **authorize-spotify** — cache a Spotify OAuth token
+6. **renamer** — template-DSL batch file renaming
 
 ## High-level architecture
 
-It's a **Rust backend + Vue 3 SPA frontend**, bridged by a **local WebSocket server** — Tauri-style, but built directly on **Wry/Tao** rather than Tauri.
+A single Rust binary (`onetagger-cli`) drives a shared engine of library crates:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Desktop window (Wry/Tao webview)  OR  plain browser     │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │  Vue 3 + Quasar SPA (client/, ~11k LOC)            │  │
-│  │  Singleton OneTagger class holds all state (Refs)  │  │
-│  └────────────────────┬──────────────────────────────┘  │
-└───────────────────────┼─────────────────────────────────┘
-                        │ WebSocket JSON (Action enum) + HTTP for assets/art/audio
-              127.0.0.1:36913
-┌───────────────────────┴─────────────────────────────────┐
-│  Axum web server (onetagger-ui)                          │
-│  Dispatches 40+ Action message types to subsystems       │
-└──┬────────┬─────────┬──────────┬─────────┬───────────────┘
-   │        │         │          │         │
- autotag  renamer  player    tag I/O   playlist
+onetagger-cli  (clap subcommands: autotagger / apply / unprocessed / audiofeatures /
+   │            authorize-spotify / renamer)
    │
-   ├── onetagger-tagger     (core traits + Track/Config + matching)
-   └── onetagger-platforms  (12 platform integrations)
+   ├── onetagger-autotag    orchestration: identify → match → write, dry-run/apply, throttles
+   │     ├── onetagger-tagger     core traits + Track/TaggerConfig + matching utils
+   │     ├── onetagger-platforms  12 metadata source integrations
+   │     ├── onetagger-tag        format-agnostic tag read/write
+   │     └── onetagger-player     audio decode (duration + Shazam sampling)
+   ├── onetagger-renamer    template-DSL file renaming
+   ├── onetagger-playlist   M3U parsing
+   └── onetagger-shared     settings, logging, constants
+
+Spotify OAuth uses a tiny built-in TcpListener callback on 127.0.0.1:36913
+(crates/onetagger-cli/src/spotify_auth.rs) — no web server / SPA.
 ```
 
-**Two binaries share the same engine:**
-- `onetagger` (GUI) — spawns the Axum server in a thread, opens a Wry webview pointing at it. Has a `--server` headless mode too.
-- `onetagger-cli` — runs autotagger/audiofeatures/renamer/spotify-auth directly, no UI.
+## Crate breakdown (workspace of 9 crates)
 
-## Crate breakdown (workspace of 11 crates)
-
-| Crate | LOC | Role |
-|---|---|---|
-| `onetagger-platforms` | 5.9k | The 12 metadata source integrations |
-| `onetagger-tag` | 2.4k | Format-agnostic tag read/write |
-| `onetagger-autotag` | 2.1k | The auto-tagging orchestration engine |
-| `onetagger-ui` | 1.3k | Axum server + WebSocket protocol |
-| `onetagger-tagger` | 1.3k | **Core contract crate** — traits, `Track`, `TaggerConfig`, matching utils |
-| `onetagger-renamer` | 1.3k | Template DSL parser + rename engine |
-| `onetagger-player` | 0.6k | Multi-format audio playback (rodio) |
-| `onetagger-cli` | 0.4k | CLI binary |
-| `onetagger` | 0.3k | GUI binary (Wry webview) |
-| `onetagger-shared` | 0.2k | Settings, logging, constants (port 36913) |
-| `onetagger-playlist` | 0.1k | M3U parsing |
+| Crate | Role |
+|---|---|
+| `onetagger-platforms` | The 12 metadata source integrations |
+| `onetagger-tag` | Format-agnostic tag read/write |
+| `onetagger-autotag` | The auto-tagging orchestration engine (+ identifier chain, changes/dry-run) |
+| `onetagger-tagger` | **Core contract crate** — traits, `Track`, `TaggerConfig`, matching utils |
+| `onetagger-renamer` | Template DSL parser + rename engine |
+| `onetagger-player` | Multi-format audio decode (rodio + lofty) |
+| `onetagger-cli` | The CLI binary (all user-facing commands) |
+| `onetagger-shared` | Settings, logging, constants (port 36913), thread defaults |
+| `onetagger-playlist` | M3U parsing |
 
 ## The key design ideas
 
@@ -80,9 +73,7 @@ Every platform implements these. The engine never knows about Beatport specifica
 
 **4. Plugin system via FFI.** Beyond the 12 built-in platforms, `onetagger-autotag/repo.rs` dynamically loads `.dll/.so/.dylib` plugins from a platforms folder using `libloading`, with a `_1T_PLATFORM_COMPATIBILITY` version handshake and the `create_plugin!` macro generating the C-ABI boilerplate. Real extensibility, though it relies on lifetime transmutes and raw pointers at the boundary.
 
-**5. Renamer DSL.** A genuine little language: `%variable%.property().function()` with 30 variables, properties (`.first()`), and functions (`replace`, `camelot`, `pad`, `join`…), complete with autocomplete and syntax highlighting served to the frontend.
-
-**6. Frontend state.** No Vuex/Pinia — a single `OneTagger` singleton (`onetagger.ts`, 765 LOC) holds all state as Vue `Ref`s and is the sole WebSocket bridge. Components call `get1t()` and override event hooks (`onTaggingDone`, etc.). Simple, but that file is a god-object.
+**5. Renamer DSL.** A genuine little language: `%variable%.property().function()` with 30 variables, properties (`.first()`), and functions (`replace`, `camelot`, `pad`, `join`…), with autocomplete and syntax-highlighting support in the parser.
 
 ## Data flow (auto-tag)
 
@@ -99,9 +90,9 @@ merge — plus the parallel `AudioFeatures::write_to_path`). It returns a `FileC
 (the before→after tag diff) and its behavior is governed by three `TaggerConfig` fields:
 `preserve_original`, `output_suffix` (default `.tagged`), and `dry_run`.
 
-**CLI is non-destructive by default; the GUI/engine default is unchanged (in-place).**
+**CLI is non-destructive by default; the engine default stays in-place.**
 `TaggerConfig::default()` sets `preserve_original = false` and `dry_run = false`
-(`onetagger-tagger/src/lib.rs`), so existing GUI/server behavior is identical to before.
+(`onetagger-tagger/src/lib.rs`) — the conservative default for library/engine callers.
 The **CLI** sets `preserve_original = true` unless `--in-place` is passed.
 
 - **Safe default (CLI):** the tagged result is written to a copy beside the original —
@@ -219,17 +210,16 @@ integration).
 ## Architectural assessment
 
 **Strengths**
-- **Clean separation via the contract crate.** `onetagger-tagger` as a dependency-light hub of traits/types is textbook — platforms, engine, and UI all depend on it, not on each other.
+- **Clean separation via the contract crate.** `onetagger-tagger` as a dependency-light hub of traits/types is textbook — platforms and engine depend on it, not on each other. (Removing the UI was low-friction precisely because of this: the engine crates never depended on `onetagger-ui`.)
 - **Format abstraction is the right shape** — `Field` enum + per-format `TagImpl` keeps format quirks contained.
-- **One engine, two frontends** (GUI + CLI) falls out naturally from the server-based design.
+- **Single CLI over a shared engine** — one binary, no GUI/web-server surface to maintain.
 - **Genuine extensibility** via the FFI plugin system.
 
-**Weaknesses / risks (relevant to any revival)**
+**Weaknesses / risks**
 - **Scraper fragility is structural**, not incidental. Several platforms parse `__NEXT_DATA__` out of HTML (Beatport) — guaranteed to break on site redesigns. This is *the* reason maintenance dominated and the project stalled.
 - **FFI plugin layer is unsafe-heavy** (`Symbol<'static>` transmutes, raw pointer boxing) — a correctness/soundness liability.
-- **Frontend god-object**: a 765-line singleton owning all state and the socket switch is hard to test and evolve.
-- **Untyped WS protocol**: a 40-variant `Action` enum on one side and a giant JS `switch` on the other, with no shared schema — easy to drift.
-- **No visible test suite** in the crates; for a tool whose core risk is matching accuracy and parser breakage, that's a notable gap.
+- **Identification depends on unofficial endpoints** — Shazam via `songrec` (reverse-engineered, rate-limited); AcoustID is the open/official fallback but needs `fpcalc` + a key.
+- **Thin test coverage** in the crates; for a tool whose core risk is matching accuracy and parser breakage, that's a notable gap.
 
 **If reviving it**, the highest-leverage moves would be:
 1. Replace HTML-scraping platforms with official APIs where they exist.
@@ -238,7 +228,6 @@ integration).
 
 ## Tech stack
 
-- **Backend:** Rust (workspace, resolver 2), Tokio + Axum web server, Wry/Tao webview, rodio (audio), libloading (FFI plugins), songrec (Shazam).
-- **Frontend:** Vue 3 + Quasar 2 + TypeScript, Vite 6, vue-router, axios; embedded into the binary at compile time via `include_dir!`.
+- **Core:** Rust (workspace, resolver 2), clap (CLI), rodio + lofty (audio decode), reqwest (HTTP), libloading (FFI plugins), songrec (Shazam), AcoustID via `fpcalc` (Chromaprint).
 - **Tag I/O libraries:** id3, metaflac, mp4ameta, lofty.
-- **Platforms:** Windows, macOS, Linux (and an Android build referenced in the 1.6.0 changelog).
+- **Platforms:** Windows, macOS, Linux. No Node.js / frontend toolchain required to build.
