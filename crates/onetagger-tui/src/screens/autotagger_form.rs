@@ -55,8 +55,12 @@ impl AutotaggerForm {
         if let Some(threads) = self.defaults.threads { config.threads = threads; }
         if let Some(enable) = self.defaults.enable_shazam { config.enable_shazam = enable; }
         if let Some(tags) = &self.defaults.tags {
-            let parsed: Vec<SupportedTag> = tags.iter().filter_map(|t|
-                serde_json::from_str(&format!("\"{}\"", t.to_case(Case::Camel))).ok()).collect();
+            let parsed: Vec<SupportedTag> = tags.iter().filter_map(|t| {
+                match serde_json::from_str(&format!("\"{}\"", t.to_case(Case::Camel))) {
+                    Ok(tag) => Some(tag),
+                    Err(_) => { warn!("Invalid tag in config: {t}"); None }
+                }
+            }).collect();
             if !parsed.is_empty() { config.tags = parsed; }
         }
         config.dry_run = self.dry_run;
@@ -79,5 +83,33 @@ impl AutotaggerForm {
         let p = Paragraph::new(lines)
             .block(Block::default().borders(Borders::ALL).title(" Auto-tag "));
         frame.render_widget(p, area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TuiDefaults;
+
+    fn form(path: &str, platforms: &str) -> AutotaggerForm {
+        let mut f = AutotaggerForm::new(TuiDefaults::default());
+        f.path = path.to_string();
+        f.platforms = platforms.to_string();
+        f
+    }
+
+    #[test]
+    fn empty_path_does_nothing() {
+        assert!(matches!(form("", "deezer").start(), Action::None));
+    }
+
+    #[test]
+    fn builds_config_with_trimmed_platforms() {
+        match form(".", "deezer, , beatport ").start() {
+            Action::StartAutotag(config, _files) => {
+                assert_eq!(config.platforms, vec!["deezer".to_string(), "beatport".to_string()]);
+            }
+            _ => panic!("expected StartAutotag"),
+        }
     }
 }
