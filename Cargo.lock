@@ -2763,11 +2763,16 @@ name = "onetagger-tui"
 version = "1.7.0"
 dependencies = [
  "anyhow",
+ "convert_case 0.8.0",
  "log",
  "onetagger-autotag",
+ "onetagger-playlist",
  "onetagger-shared",
  "onetagger-tagger",
  "ratatui",
+ "serde",
+ "serde_json",
+ "toml 0.8.2",
 ]
 
 [[package]]

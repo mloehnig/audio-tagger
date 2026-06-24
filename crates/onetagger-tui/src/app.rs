@@ -11,6 +11,7 @@ pub enum Action {
     Push(Screen),
     Pop,
     Quit,
+    StartAutotag(Box<onetagger_tagger::TaggerConfig>, Vec<std::path::PathBuf>),
 }
 
 pub struct App {
@@ -38,6 +39,7 @@ impl App {
                 }
             }
             Action::Quit => self.should_quit = true,
+            Action::StartAutotag(..) => {}
         }
     }
 }

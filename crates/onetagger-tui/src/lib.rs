@@ -4,6 +4,7 @@ mod run_state;
 mod app;
 mod terminal;
 mod screens;
+mod config;
 
 /// Entry point for the interactive TUI. (Stub — wired up in later tasks.)
 pub fn run() -> anyhow::Result<()> {
