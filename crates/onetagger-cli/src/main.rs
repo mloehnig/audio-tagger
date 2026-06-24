@@ -38,8 +38,9 @@ fn main() {
         return;
     }
 
-    // Setup logging
-    onetagger_shared::setup();
+    // Setup logging. The TUI takes over the terminal, so it logs to file only.
+    let to_console = !matches!(cli.action, Some(Actions::Tui));
+    onetagger_shared::setup_logging(to_console);
     info!("\n\nStarting OneTagger v{VERSION} Commit: {COMMIT} OS: {}\n\n", std::env::consts::OS);
 
 
@@ -214,6 +215,12 @@ fn main() {
                     Ok(p) => info!("Wrote config template to {}", p.display()),
                     Err(e) => { error!("{e}"); std::process::exit(1); }
                 },
+            }
+        },
+        Actions::Tui => {
+            if let Err(e) = onetagger_tui::run() {
+                error!("TUI exited with error: {e}");
+                std::process::exit(1);
             }
         },
     }
@@ -593,6 +600,8 @@ enum Actions {
         #[clap(subcommand)]
         action: ConfigAction,
     },
+    /// Launch the interactive terminal UI
+    Tui,
 }
 
 #[derive(Subcommand, Debug, Clone)]

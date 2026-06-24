@@ -22,6 +22,7 @@ onetagger-autotag = { path = "../onetagger-autotag" }
 onetagger-renamer = { path = "../onetagger-renamer" }
 onetagger-playlist = { path = "../onetagger-playlist" }
 onetagger-platforms = { path = "../onetagger-platforms" }
+onetagger-tui = { path = "../onetagger-tui" }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

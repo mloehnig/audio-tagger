@@ -1,0 +1,13 @@
+[package]
+name = "onetagger-tui"
+version = "1.7.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4"
+anyhow = "1.0"
+ratatui = "0.29"
+
+onetagger-shared = { path = "../onetagger-shared" }
+onetagger-tagger = { path = "../onetagger-tagger" }
+onetagger-autotag = { path = "../onetagger-autotag" }
