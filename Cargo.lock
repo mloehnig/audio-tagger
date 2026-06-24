@@ -2500,7 +2500,9 @@ dependencies = [
  "onetagger-renamer",
  "onetagger-shared",
  "onetagger-tagger",
+ "serde",
  "serde_json",
+ "toml 0.8.2",
  "winres",
 ]
 
