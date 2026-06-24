@@ -70,9 +70,11 @@ fn run_app(tui: &mut terminal::Tui) -> Result<()> {
                     }
                     Action::StartAutotag(config, files) => {
                         let mut state = RunState::new();
+                        rx = None; // clear any receiver from a previous run
                         if files.is_empty() {
                             state.done = true;
                         } else {
+                            // TODO(SP-later): surface TaggerFinishedData (success/failed m3u paths) in the dashboard
                             rx = Some(Tagger::tag_files(&config, files, Arc::new(Mutex::new(None))));
                         }
                         run = Some(state);

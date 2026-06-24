@@ -20,14 +20,16 @@ pub fn render(frame: &mut Frame, area: Rect, run: &RunState) {
         run.ok, run.failed, run.skipped
     );
     let gauge = Gauge::default()
-        .block(Block::default().borders(Borders::ALL).title(if run.done { " done " } else { " tagging " }))
+        .block(Block::default().borders(Borders::ALL).title(
+            if run.done { " done " } else if run.stopping { " stopping… " } else { " tagging " }
+        ))
         .gauge_style(Style::default().fg(Color::Cyan))
         .percent(pct)
         .label(header);
     frame.render_widget(gauge, chunks[0]);
 
     // Bottom: recent results
-    let items: Vec<ListItem> = run.recent.iter().take(chunks[1].height as usize).map(|r| {
+    let items: Vec<ListItem> = run.recent.iter().take((chunks[1].height as usize).saturating_sub(2)).map(|r| {
         let (icon, color) = match r.state {
             TaggingState::Ok => ("✓", Color::Green),
             TaggingState::Error => ("✗", Color::Red),
