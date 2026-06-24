@@ -2764,6 +2764,7 @@ version = "1.7.0"
 dependencies = [
  "anyhow",
  "convert_case 0.8.0",
+ "crossbeam-channel",
  "log",
  "onetagger-autotag",
  "onetagger-playlist",
