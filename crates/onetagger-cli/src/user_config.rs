@@ -91,6 +91,52 @@ impl Defaults {
     }
 }
 
+/// Commented starter template written by `config init`.
+pub const TEMPLATE: &str = r#"# OneTagger CLI configuration
+# Uncomment and edit. CLI flags override these; flags > this file > built-in defaults.
+
+# [spotify]
+# client_id = ""
+# client_secret = ""
+
+# acoustid_api_key = ""
+
+# [defaults]
+# platforms = ["deezer", "beatport"]
+# tags = ["title", "artist", "album", "genre", "bpm", "label", "isrc", "albumArt"]
+# threads = 8
+# strictness = 80          # 0-100
+# output_suffix = ".tagged"
+# in_place = false
+# overwrite = true
+# enable_shazam = true
+# force_shazam = false
+# shazam_concurrency = 3
+# shazam_interval_ms = 350
+# include_subfolders = true
+"#;
+
+/// Write the template to the config path. Refuses to overwrite unless `force`. Sets 0600 on Unix.
+pub fn write_template(force: bool) -> Result<PathBuf, anyhow::Error> {
+    let p = path();
+    if p.exists() && !force {
+        anyhow::bail!("Config already exists at {} (use --force to overwrite)", p.display());
+    }
+    std::fs::write(&p, TEMPLATE)?;
+    set_owner_only(&p);
+    Ok(p)
+}
+
+#[cfg(unix)]
+fn set_owner_only(p: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Err(e) = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600)) {
+        warn!("Failed setting 0600 on {}: {e}", p.display());
+    }
+}
+#[cfg(not(unix))]
+fn set_owner_only(_p: &Path) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +211,14 @@ include_subfolders = false
         assert_eq!(config.overwrite, false);
         assert_eq!(config.enable_shazam, true);
         assert_eq!(config.include_subfolders, false);
+    }
+
+    #[test]
+    fn template_parses_to_defaults() {
+        // The shipped template is fully commented, so it parses to an all-default config.
+        let cfg: UserConfig = toml::from_str(TEMPLATE).unwrap();
+        assert!(cfg.spotify.is_none());
+        assert!(cfg.acoustid_api_key.is_none());
+        assert!(cfg.defaults.platforms.is_none());
     }
 }
